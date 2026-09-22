@@ -1,0 +1,257 @@
+import pandas as pd
+import pulp
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+
+
+def read_input(file_name):
+    data = pd.read_excel(file_name + ".xlsx", header=None)
+
+    tj = [x for x in data.iloc[1, 1:].tolist() if pd.notna(x)]
+    n = len(tj)
+
+    dj = data.iloc[2, 1:n + 1].tolist()
+    vj = data.iloc[3, 1:n + 1].tolist()
+    wj = data.iloc[4, 1:n + 1].tolist()
+
+    tj = [float(x) for x in tj]
+    dj = [float(x) for x in dj]
+    vj = [float(x) for x in vj]
+    wj = [float(x) for x in wj]
+
+    return tj, dj, vj, wj, n
+
+
+def build_model(tj, dj, vj, wj, n):
+    model = pulp.LpProblem("Scheduling_Problem", pulp.LpMinimize)
+
+    S = [pulp.LpVariable(f"S_{j}", lowBound=0) for j in range(n)]
+    E = [pulp.LpVariable(f"E_{j}", lowBound=0) for j in range(n)]
+    T = [pulp.LpVariable(f"T_{j}", lowBound=0) for j in range(n)]
+    C = [S[j] + tj[j] for j in range(n)]
+
+    for j in range(n):
+        model += E[j] >= dj[j] - C[j]
+        model += T[j] >= C[j] - dj[j]
+
+    for j in range(n - 1):
+        model += S[j] + tj[j] <= S[j + 1]
+
+    model += sum(
+        vj[j] * E[j] + wj[j] * T[j]
+        for j in range(n)
+    )
+
+    return model, S
+
+
+def solve_model(model):
+    solver = pulp.PULP_CBC_CMD(timeLimit=5, msg=False)
+    model.solve(solver)
+
+
+def extract_results(S, tj, dj, vj, wj, n):
+    Sj = [
+        pulp.value(S[j]) if pulp.value(S[j]) else 0.0
+        for j in range(n)
+    ]
+
+    Cj = [Sj[j] + tj[j] for j in range(n)]
+    Ej = [max(0.0, dj[j] - Cj[j]) for j in range(n)]
+    Tj = [max(0.0, Cj[j] - dj[j]) for j in range(n)]
+
+    Pj = [
+        vj[j] * Ej[j] + wj[j] * Tj[j]
+        for j in range(n)
+    ]
+
+    total_penalty = sum(Pj)
+
+    return Sj, Cj, Ej, Tj, Pj, total_penalty
+
+
+def write_output(
+    file_name,
+    tj,
+    dj,
+    vj,
+    wj,
+    Sj,
+    Cj,
+    Ej,
+    Tj,
+    Pj,
+    total_penalty,
+    n,
+    original_penalty,
+    generation_count,
+    run_time,
+    order=None
+):
+    wb = Workbook()
+    ws = wb.active
+
+    if order is None:
+        order = list(range(n))
+
+    # Job headers
+    for col, j in enumerate(order, start=2):
+        ws.cell(row=1, column=col).value = f"j{j + 1}"
+
+    labels = [
+        "tj", "dj", "vj", "wj",
+        "Sj", "Cj", "Ej", "Tj", "Pj"
+    ]
+
+    for row, label in enumerate(labels, start=2):
+        ws.cell(row=row, column=1).value = label
+
+    # Job data
+    for col, j in enumerate(order, start=2):
+        ws.cell(row=2, column=col).value = tj[j]
+        ws.cell(row=3, column=col).value = dj[j]
+        ws.cell(row=4, column=col).value = vj[j]
+        ws.cell(row=5, column=col).value = wj[j]
+        ws.cell(row=6, column=col).value = Sj[j]
+        ws.cell(row=7, column=col).value = Cj[j]
+        ws.cell(row=8, column=col).value = Ej[j]
+        ws.cell(row=9, column=col).value = Tj[j]
+        ws.cell(row=10, column=col).value = Pj[j]
+
+    # Excel formatting
+    thin = Side(style="thin")
+
+    border = Border(
+        left=thin,
+        right=thin,
+        top=thin,
+        bottom=thin
+    )
+
+    bold = Font(bold=True)
+
+    for row in ws.iter_rows(
+        min_row=1,
+        max_row=30,
+        min_col=1,
+        max_col=50
+    ):
+        for cell in row:
+            if cell.value is not None:
+                cell.border = border
+                cell.alignment = Alignment(
+                    horizontal="center",
+                    vertical="center"
+                )
+
+    for col in range(2, n + 2):
+        ws.cell(row=1, column=col).font = bold
+
+    for row in range(2, 11):
+        ws.cell(row=row, column=1).font = bold
+
+    for col in range(1, 60):
+        col_letter = get_column_letter(col)
+        ws.column_dimensions[col_letter].width = 25
+
+    # Summary statistics
+    ws.cell(row=12, column=1).value = "Total Penalty"
+    ws.cell(row=12, column=2).value = total_penalty
+
+    ws.cell(row=13, column=1).value = "Original Sol"
+    ws.cell(row=13, column=2).value = original_penalty
+
+    ws.cell(row=14, column=1).value = "Total Gen Created"
+    ws.cell(row=14, column=2).value = generation_count
+
+    ws.cell(row=15, column=1).value = "Run Time"
+    ws.cell(row=15, column=2).value = round(run_time, 2)
+
+    for row in range(12, 16):
+        ws.cell(row=row, column=1).font = bold
+
+    # Gantt chart
+    job_fill = PatternFill(
+        start_color="ADD8E6",
+        end_color="ADD8E6",
+        fill_type="solid"
+    )
+
+    idle_fill = PatternFill(
+        start_color="FF9999",
+        end_color="FF9999",
+        fill_type="solid"
+    )
+
+    ws.cell(row=17, column=1).value = "Gantt"
+    ws.cell(row=17, column=1).font = bold
+
+    current_time = 0.0
+    col = 2
+
+    for j in order:
+        start = round(Sj[j], 2)
+        finish = round(Cj[j], 2)
+
+        if start > current_time:
+            cell = ws.cell(row=17, column=col)
+            cell.value = f"IDLE {current_time}-{start}"
+            cell.fill = idle_fill
+            col += 1
+
+        cell = ws.cell(row=17, column=col)
+        cell.value = f"j{j + 1} {start}-{finish}"
+        cell.fill = job_fill
+
+        col += 1
+        current_time = finish
+
+    wb.save(file_name + ".xlsx")
+
+
+def Run_Solver(Input_File_Name, Output_File_Na):
+    tj, dj, vj, wj, n = read_input(Input_File_Name)
+
+    model, S = build_model(
+        tj,
+        dj,
+        vj,
+        wj,
+        n
+    )
+
+    solve_model(model)
+
+    Sj, Cj, Ej, Tj, Pj, total_penalty = extract_results(
+        S,
+        tj,
+        dj,
+        vj,
+        wj,
+        n
+    )
+
+    write_output(
+        Output_File_Na,
+        tj,
+        dj,
+        vj,
+        wj,
+        Sj,
+        Cj,
+        Ej,
+        Tj,
+        Pj,
+        total_penalty,
+        n,
+        total_penalty,
+        0,
+        0.0
+    )
+
+    print(
+        "Solver Objective value:",
+        total_penalty,
+        flush=True
+    )
