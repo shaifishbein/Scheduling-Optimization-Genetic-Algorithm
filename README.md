@@ -48,7 +48,7 @@ The model includes:
 The program reads scheduling data and Genetic Algorithm parameters from Excel files.
 
 The generated Excel output includes:
-- Job sequence
+- Optimized job sequence
 - Start and completion times
 - Earliness and tardiness
 - Penalty per job
@@ -56,6 +56,12 @@ The generated Excel output includes:
 - Number of GA generations
 - Runtime
 - Gantt-style schedule visualization
+
+## Example Optimization Result
+
+In the example below, the Genetic Algorithm improved the total scheduling penalty from **250 to 207**, a **17.2% reduction**, after evaluating solutions across **147 generations**.
+
+![Scheduling Optimization Results](optimization_results.png)
 
 ## User Interface
 
@@ -82,6 +88,7 @@ Scheduling-Optimization-Genetic-Algorithm/
 ├── genetic_algorithm.py
 ├── optimization_solver.py
 ├── requirements.txt
+├── optimization_results.png
 ├── .gitignore
 └── README.md
 ```
