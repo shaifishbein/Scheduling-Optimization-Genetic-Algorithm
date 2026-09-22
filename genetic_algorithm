@@ -1,0 +1,239 @@
+from optimization_solver import read_input, write_output, solve_model, extract_results
+import pandas as pd
+import random
+import time
+import pulp
+
+
+def read_ga_parameters(file_name):
+    data = pd.read_excel(file_name + ".xlsx", header=None)
+    return int(data.iloc[6, 0]), int(data.iloc[8, 0]), float(data.iloc[10, 0]), float(data.iloc[12, 0])
+
+
+def validate_parameters(population_size, survivors, mutation_prob, time_limit):
+    if population_size < 20 or population_size > 200 or population_size % 2 != 0:
+        raise ValueError("Invalid Population Size")
+
+    if survivors <= 0 or survivors % 2 != 0:
+        raise ValueError("Survivors must be even")
+
+    if survivors > 0.1 * population_size:
+        raise ValueError("Survivors exceeds 10%")
+
+    if not (0 <= mutation_prob <= 1):
+        raise ValueError("Invalid mutation probability")
+
+    if time_limit <= 0:
+        raise ValueError("Invalid time limit")
+
+
+def evaluate_solution(order, tj, dj, vj, wj, n):
+    model = pulp.LpProblem("GA_SubProblem", pulp.LpMinimize)
+
+    S = [pulp.LpVariable(f"S_{j}", lowBound=0) for j in range(n)]
+    E = [pulp.LpVariable(f"E_{j}", lowBound=0) for j in range(n)]
+    T = [pulp.LpVariable(f"T_{j}", lowBound=0) for j in range(n)]
+    C = [S[j] + tj[j] for j in range(n)]
+
+    for j in range(n):
+        model += E[j] >= dj[j] - C[j]
+        model += T[j] >= C[j] - dj[j]
+
+    for i in range(n - 1):
+        model += S[order[i]] + tj[order[i]] <= S[order[i + 1]]
+
+    model += sum(vj[j] * E[j] + wj[j] * T[j] for j in range(n))
+
+    solve_model(model)
+
+    return extract_results(S, tj, dj, vj, wj, n)
+
+
+def generate_population(n, size):
+    base = list(range(n))
+    return [random.sample(base, n) for _ in range(size)]
+
+
+def selection(population, scores, survivors):
+    paired = sorted(zip(population, scores), key=lambda x: x[1])
+    N = len(paired)
+
+    pool = [p[0] for p in paired]
+    weights = [(N - i) for i in range(N)]
+
+    chosen = []
+    available_pool = pool[:]
+    available_weights = weights[:]
+
+    for _ in range(survivors):
+        selected = random.choices(
+            available_pool,
+            weights=available_weights,
+            k=1
+        )[0]
+
+        idx = available_pool.index(selected)
+
+        chosen.append(selected[:])
+        available_pool.pop(idx)
+        available_weights.pop(idx)
+
+    return chosen, pool, weights
+
+
+def crossover(p1, p2):
+    cut = random.randint(1, len(p1) - 2)
+
+    child = p1[:cut]
+
+    for gene in p2:
+        if gene not in child:
+            child.append(gene)
+
+    return child
+
+
+def mutate(ind):
+    i, j = random.sample(range(len(ind)), 2)
+
+    ind[i], ind[j] = ind[j], ind[i]
+
+    return ind
+
+
+def Run_GA(Input_File_Name, Output_File_Na):
+
+    print("GA started", flush=True)
+
+    tj, dj, vj, wj, n = read_input(Input_File_Name)
+
+    population_size, survivors, mutation_prob, time_limit = \
+        read_ga_parameters(Input_File_Name)
+
+    validate_parameters(
+        population_size,
+        survivors,
+        mutation_prob,
+        time_limit
+    )
+
+    original_order = list(range(n))
+
+    original_result = evaluate_solution(
+        original_order,
+        tj,
+        dj,
+        vj,
+        wj,
+        n
+    )
+
+    original_penalty = original_result[-1]
+
+    best_score = original_penalty
+    best_solution = original_order[:]
+    best_data = original_result
+
+    population = generate_population(n, population_size)
+
+    start_time = time.time()
+    generation = 0
+
+    while time.time() - start_time < time_limit:
+
+        scores = []
+
+        for p in population:
+
+            result = evaluate_solution(
+                p,
+                tj,
+                dj,
+                vj,
+                wj,
+                n
+            )
+
+            score = result[-1]
+
+            scores.append(score)
+
+            if score < best_score:
+
+                best_score = score
+                best_solution = p[:]
+                best_data = result
+
+                print(
+                    f"Improvement found! Gen {generation} | "
+                    f"New Best = {best_score}",
+                    flush=True
+                )
+
+        if generation % 5 == 0:
+
+            print(
+                f"Gen {generation} | Best = {best_score}",
+                flush=True
+            )
+
+        elites, pool, weights = selection(
+            population,
+            scores,
+            survivors
+        )
+
+        new_population = elites[:]
+
+        while len(new_population) < population_size:
+
+            p1 = random.choices(pool, weights=weights)[0]
+            p2 = random.choices(pool, weights=weights)[0]
+
+            child = crossover(p1, p2)
+
+            new_population.append(child)
+
+        for i in range(len(new_population)):
+
+            if random.random() < mutation_prob:
+
+                new_population[i] = mutate(
+                    new_population[i]
+                )
+
+        population = new_population
+
+        generation += 1
+
+    runtime = time.time() - start_time
+
+    Sj, Cj, Ej, Tj, Pj, _ = best_data
+
+    write_output(
+        Output_File_Na,
+        tj,
+        dj,
+        vj,
+        wj,
+        Sj,
+        Cj,
+        Ej,
+        Tj,
+        Pj,
+        best_score,
+        n,
+        original_penalty,
+        generation,
+        runtime,
+        order=best_solution
+    )
+
+    print("\n--- GA Finished ---", flush=True)
+    print(f"Initial Solution: {original_penalty}", flush=True)
+    print(f"Best Solution: {best_score}", flush=True)
+    print(f"Generations: {generation}", flush=True)
+    print(
+        f"Run Time: {round(runtime, 2)} seconds",
+        flush=True
+    )
